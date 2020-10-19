@@ -118,27 +118,39 @@ class MonitorField(models.DateTimeField):
 
     def contribute_to_class(self, cls, name):
         self.monitor_attname = '_monitor_%s' % name
+        self.org_datetime_attname = '_org_datetime_%s' % name
         models.signals.post_init.connect(self._save_initial, sender=cls)
         super().contribute_to_class(cls, name)
 
     def get_monitored_value(self, instance):
         return getattr(instance, self.monitor)
 
+    def get_latest_datetime(self, instance):
+        return getattr(instance, self.attname, None)
+
     def _save_initial(self, sender, instance, **kwargs):
         if self.monitor in instance.get_deferred_fields():
             # Fix related to issue #241 to avoid recursive error on double monitor fields
             return
+        setattr(instance, self.org_datetime_attname, self.get_latest_datetime(instance))
         setattr(instance, self.monitor_attname, self.get_monitored_value(instance))
 
     def pre_save(self, model_instance, add):
-        value = now()
-        previous = getattr(model_instance, self.monitor_attname, None)
-        current = self.get_monitored_value(model_instance)
-        if previous != current:
-            if self.when is None or current in self.when:
-                setattr(model_instance, self.attname, value)
-                self._save_initial(model_instance.__class__, model_instance)
+        if self._has_override(model_instance):
+            self._save_initial(model_instance.__class__, model_instance)
+        else:
+            value = now()
+            previous = getattr(model_instance, self.monitor_attname, None)
+            current = self.get_monitored_value(model_instance)
+            if previous != current:
+                if self.when is None or current in self.when:
+                    setattr(model_instance, self.attname, value)
+                    self._save_initial(model_instance.__class__, model_instance)
         return super().pre_save(model_instance, add)
+
+    def _has_override(self, model_instance):
+        original_datetime = getattr(model_instance, self.org_datetime_attname, None)
+        return original_datetime != self.get_latest_datetime(model_instance)
 
     def deconstruct(self):
         name, path, args, kwargs = super().deconstruct()
